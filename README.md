@@ -79,14 +79,173 @@ The `docker-compose.yml` orchestrates:
 - Health checks for reliable service startup
 - Volume persistence for database data
 
-### Jenkinsfile Pipeline Stages
+### Jenkins Pipeline Deep Dive
 
-1. **Cleanup**: Removes existing containers and prunes unused Docker resources
-2. **Clone Repository**: Fetches the latest code from the Spring Pet Clinic repository
-3. **Copy Local Configs**: Copies custom Dockerfile and docker-compose.yml from Jenkins server
-4. **Build Docker Image**: Creates the application Docker image
-5. **Run Docker Compose**: Starts the multi-container application
-6. **Verify Deployment**: Health check to ensure the application is running
+The Jenkins pipeline is defined as a declarative pipeline with the following structure:
+
+#### Pipeline Configuration
+```groovy
+pipeline {
+    agent any  // Can run on any available Jenkins agent
+    environment {
+        DOCKER_COMPOSE_FILE = 'docker-compose.yml'  // Environment variable for compose file
+    }
+}
+```
+
+#### Stage-by-Stage Breakdown
+
+**1. Cleanup Stage**
+```groovy
+stage('Cleanup') {
+    steps {
+        script {
+            sh 'docker-compose down || true'
+            sh 'docker system prune -f || true'
+        }
+    }
+}
+```
+- **Purpose**: Ensures a clean environment before deployment
+- **Actions**: 
+  - Stops and removes any existing containers from previous runs
+  - Prunes unused Docker resources (images, networks, volumes)
+- **Error Handling**: Uses `|| true` to prevent pipeline failure if no containers exist
+
+**2. Clone Repository Stage**
+```groovy
+stage('Clone Repository') {
+    steps {
+        git branch: 'main', url: 'https://github.com/spring-projects/spring-petclinic.git'
+    }
+}
+```
+- **Purpose**: Fetches the latest source code
+- **Actions**: Clones the official Spring Pet Clinic repository from GitHub
+- **Branch**: Specifically pulls from the `main` branch
+- **Workspace**: Code is cloned into Jenkins workspace directory
+
+**3. Copy Local Configs Stage**
+```groovy
+stage('Copy Local Configs') {
+    steps {
+        script {
+            sh "cp /home/ell/Dockerfile ./Dockerfile"
+            sh "cp /home/ell/docker-compose.yml ./docker-compose.yml"
+        }
+    }
+}
+```
+- **Purpose**: Replaces default configs with custom ones
+- **Actions**: 
+  - Copies custom Dockerfile from Jenkins server to workspace
+  - Copies custom docker-compose.yml to workspace
+- **Why Needed**: The original Pet Clinic may not have Docker configs or may have different requirements
+
+**4. Build Docker Image Stage**
+```groovy
+stage('Build Docker Image') {
+    steps {
+        script {
+            sh 'docker build -t petclinic-app .'
+        }
+    }
+}
+```
+- **Purpose**: Creates the application Docker image
+- **Actions**: Builds Docker image using the copied Dockerfile
+- **Image Tag**: Names the image `petclinic-app`
+- **Build Context**: Uses current directory (`.`) as build context
+
+**5. Run Docker Compose Stage**
+```groovy
+stage('Run Docker Compose') {
+    steps {
+        script {
+            sh 'docker-compose up -d'
+        }
+    }
+}
+```
+- **Purpose**: Starts the multi-container application
+- **Actions**: 
+  - Starts MySQL database container
+  - Starts Spring Boot application container
+- **Detached Mode**: `-d` flag runs containers in background
+- **Dependencies**: Docker Compose handles service dependencies automatically
+
+**6. Verify Deployment Stage**
+```groovy
+stage('Verify Deployment') {
+    steps {
+        script {
+            sleep(30) // Wait for services to start
+            sh 'curl -f http://localhost:9090 || exit 1'
+        }
+    }
+}
+```
+- **Purpose**: Confirms successful deployment
+- **Actions**: 
+  - Waits 30 seconds for services to fully initialize
+  - Makes HTTP request to application endpoint
+  - Fails pipeline if application doesn't respond
+- **Health Check**: Uses `curl -f` which fails on HTTP error codes
+
+#### Post-Pipeline Actions
+```groovy
+post {
+    always {
+        echo 'Pipeline completed'
+    }
+    failure {
+        sh 'docker-compose logs || true'
+        sh 'docker-compose down || true'
+    }
+}
+```
+
+**Always Block**: Executes regardless of pipeline success/failure
+- Simple completion notification
+
+**Failure Block**: Executes only if pipeline fails
+- **Debugging**: Outputs container logs to help diagnose issues
+- **Cleanup**: Stops containers to prevent resource consumption
+- **Error Handling**: Uses `|| true` to prevent secondary failures
+
+#### Pipeline Flow Diagram
+
+```
+Start Pipeline
+     ↓
+[Cleanup] → Remove old containers & images
+     ↓
+[Clone] → Fetch source code from GitHub
+     ↓
+[Copy Configs] → Replace with custom Docker files
+     ↓
+[Build] → Create application Docker image
+     ↓
+[Deploy] → Start containers with docker-compose
+     ↓
+[Verify] → Health check application endpoint
+     ↓
+Success/Failure → Cleanup if failed
+     ↓
+End Pipeline
+```
+
+#### Key Pipeline Features
+
+**Idempotency**: Pipeline can be run multiple times safely due to cleanup stage
+
+**Error Resilience**: Strategic use of `|| true` prevents cascading failures
+
+**Separation of Concerns**: Each stage has a single, clear responsibility
+
+**Visibility**: Post-actions provide debugging information on failures
+
+**Automation**: Fully automated from code checkout to deployment verification
 
 ## 🛠️ Customization
 
